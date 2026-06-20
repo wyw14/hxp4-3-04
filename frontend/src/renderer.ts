@@ -146,24 +146,36 @@ export class Renderer {
     time: number,
     showFreq: boolean,
     highlightedId: string | null,
-    connectedIds: Set<string>
+    connectedIds: Set<string>,
+    keyboardMode: boolean = false,
+    keyboardFocusId: string | null = null,
+    keyboardStartId: string | null = null
   ): void {
     for (const anchor of anchors) {
       const pos = this.getAnchorScreenPos(anchor, rotation);
       const twinkle = Math.sin(time * anchor.frequency * 0.8) * 0.3 + 0.7;
       const brightness = (anchor.baseBrightness ?? 0.7) * twinkle;
-      const size = (anchor.size ?? 3) * (highlightedId === anchor.id ? 1.8 : 1);
+      const isKeyboardFocus = keyboardMode && keyboardFocusId === anchor.id;
+      const isKeyboardStart = keyboardMode && keyboardStartId === anchor.id;
+      const isHighlighted = highlightedId === anchor.id || isKeyboardFocus || isKeyboardStart;
+      const size = (anchor.size ?? 3) * (isHighlighted ? 1.8 : 1);
 
       const isAnchor = anchor.id.startsWith('a') || anchor.id.startsWith('b') || anchor.id.startsWith('c');
       const baseColor = isAnchor ? { r: 200, g: 220, b: 255 } : { r: 180, g: 180, b: 200 };
       const isConnected = connectedIds.has(anchor.id);
-      const connColor = isConnected ? { r: 255, g: 215, b: 100 } : baseColor;
+      let starColor = isConnected ? { r: 255, g: 215, b: 100 } : baseColor;
+
+      if (isKeyboardStart) {
+        starColor = { r: 100, g: 255, b: 180 };
+      } else if (isKeyboardFocus) {
+        starColor = { r: 150, g: 200, b: 255 };
+      }
 
       const glowR = size * 8;
       const glow = this.ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, glowR);
-      glow.addColorStop(0, `rgba(${connColor.r}, ${connColor.g}, ${connColor.b}, ${brightness * 0.5})`);
-      glow.addColorStop(0.4, `rgba(${connColor.r}, ${connColor.g}, ${connColor.b}, ${brightness * 0.15})`);
-      glow.addColorStop(1, `rgba(${connColor.r}, ${connColor.g}, ${connColor.b}, 0)`);
+      glow.addColorStop(0, `rgba(${starColor.r}, ${starColor.g}, ${starColor.b}, ${brightness * 0.5})`);
+      glow.addColorStop(0.4, `rgba(${starColor.r}, ${starColor.g}, ${starColor.b}, ${brightness * 0.15})`);
+      glow.addColorStop(1, `rgba(${starColor.r}, ${starColor.g}, ${starColor.b}, 0)`);
       this.ctx.beginPath();
       this.ctx.arc(pos.x, pos.y, glowR, 0, Math.PI * 2);
       this.ctx.fillStyle = glow;
@@ -171,7 +183,7 @@ export class Renderer {
 
       this.ctx.beginPath();
       this.ctx.arc(pos.x, pos.y, size, 0, Math.PI * 2);
-      this.ctx.fillStyle = `rgba(${connColor.r}, ${connColor.g}, ${connColor.b}, ${brightness})`;
+      this.ctx.fillStyle = `rgba(${starColor.r}, ${starColor.g}, ${starColor.b}, ${brightness})`;
       this.ctx.fill();
 
       this.ctx.beginPath();
@@ -179,7 +191,86 @@ export class Renderer {
       this.ctx.fillStyle = '#ffffff';
       this.ctx.fill();
 
-      if (highlightedId === anchor.id) {
+      if (isKeyboardFocus) {
+        const focusPulse = 0.7 + Math.sin(time * 4) * 0.3;
+        const focusR = size * 3.2;
+
+        const focusGlow = this.ctx.createRadialGradient(pos.x, pos.y, focusR * 0.5, pos.x, pos.y, focusR * 1.8);
+        focusGlow.addColorStop(0, `rgba(100, 180, 255, ${0.35 * focusPulse})`);
+        focusGlow.addColorStop(1, 'rgba(100, 180, 255, 0)');
+        this.ctx.beginPath();
+        this.ctx.arc(pos.x, pos.y, focusR * 1.8, 0, Math.PI * 2);
+        this.ctx.fillStyle = focusGlow;
+        this.ctx.fill();
+
+        this.ctx.beginPath();
+        this.ctx.arc(pos.x, pos.y, focusR, 0, Math.PI * 2);
+        this.ctx.strokeStyle = `rgba(100, 200, 255, ${0.85 * focusPulse})`;
+        this.ctx.lineWidth = 3;
+        this.ctx.stroke();
+
+        this.ctx.beginPath();
+        this.ctx.arc(pos.x, pos.y, focusR * 1.3, 0, Math.PI * 2);
+        this.ctx.strokeStyle = `rgba(150, 220, 255, ${0.5 * focusPulse})`;
+        this.ctx.lineWidth = 1.5;
+        this.ctx.setLineDash([6, 4]);
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+
+        const crossSize = focusR * 0.4;
+        this.ctx.strokeStyle = `rgba(100, 200, 255, ${0.9})`;
+        this.ctx.lineWidth = 2;
+        this.ctx.lineCap = 'round';
+        for (let i = 0; i < 4; i++) {
+          const angle = (i * Math.PI / 2) + time * 0.5;
+          const x1 = pos.x + Math.cos(angle) * (focusR + 4);
+          const y1 = pos.y + Math.sin(angle) * (focusR + 4);
+          const x2 = pos.x + Math.cos(angle) * (focusR + 4 + crossSize);
+          const y2 = pos.y + Math.sin(angle) * (focusR + 4 + crossSize);
+          this.ctx.beginPath();
+          this.ctx.moveTo(x1, y1);
+          this.ctx.lineTo(x2, y2);
+          this.ctx.stroke();
+        }
+        this.ctx.lineCap = 'butt';
+      }
+
+      if (isKeyboardStart) {
+        const startPulse = 0.8 + Math.sin(time * 5) * 0.2;
+        const startR = size * 3.8;
+
+        const startGlow = this.ctx.createRadialGradient(pos.x, pos.y, size, pos.x, pos.y, startR * 2);
+        startGlow.addColorStop(0, `rgba(100, 255, 180, ${0.4 * startPulse})`);
+        startGlow.addColorStop(0.5, `rgba(100, 255, 180, ${0.15 * startPulse})`);
+        startGlow.addColorStop(1, 'rgba(100, 255, 180, 0)');
+        this.ctx.beginPath();
+        this.ctx.arc(pos.x, pos.y, startR * 2, 0, Math.PI * 2);
+        this.ctx.fillStyle = startGlow;
+        this.ctx.fill();
+
+        this.ctx.beginPath();
+        this.ctx.arc(pos.x, pos.y, startR, 0, Math.PI * 2);
+        this.ctx.strokeStyle = `rgba(100, 255, 180, ${startPulse})`;
+        this.ctx.lineWidth = 4;
+        this.ctx.stroke();
+
+        for (let ring = 1; ring <= 2; ring++) {
+          const ringOffset = (time * 30 + ring * 20) % 25;
+          const ringAlpha = Math.max(0, 0.6 - ringOffset / 40) * startPulse;
+          this.ctx.beginPath();
+          this.ctx.arc(pos.x, pos.y, startR + ringOffset, 0, Math.PI * 2);
+          this.ctx.strokeStyle = `rgba(100, 255, 180, ${ringAlpha})`;
+          this.ctx.lineWidth = 2;
+          this.ctx.stroke();
+        }
+
+        this.ctx.font = 'bold 12px monospace';
+        this.ctx.textAlign = 'center';
+        this.ctx.fillStyle = `rgba(100, 255, 180, ${startPulse})`;
+        this.ctx.fillText('● START', pos.x, pos.y - startR - 10);
+      }
+
+      if (highlightedId === anchor.id && !isKeyboardFocus && !isKeyboardStart) {
         this.ctx.beginPath();
         this.ctx.arc(pos.x, pos.y, size * 2.5, 0, Math.PI * 2);
         this.ctx.strokeStyle = `rgba(255, 255, 255, ${0.5 + Math.sin(time * 5) * 0.3})`;
@@ -193,9 +284,159 @@ export class Renderer {
         this.ctx.font = '11px monospace';
         this.ctx.textAlign = 'center';
         this.ctx.fillStyle = `rgba(160, 196, 255, ${brightness * 0.9})`;
-        this.ctx.fillText(`${anchor.frequency.toFixed(1)}Hz`, pos.x, pos.y - size - 10);
+        this.ctx.fillText(`${anchor.frequency.toFixed(1)}Hz`, pos.x, pos.y - size - (isKeyboardStart ? 32 : 10));
       }
     }
+  }
+
+  drawKeyboardPreviewLine(
+    fromAnchor: AnchorPoint,
+    toAnchor: AnchorPoint,
+    time: number,
+    rotation: number
+  ): void {
+    const fromPos = this.getAnchorScreenPos(fromAnchor, rotation);
+    const toPos = this.getAnchorScreenPos(toAnchor, rotation);
+
+    const midX = (fromPos.x + toPos.x) / 2;
+    const midY = (fromPos.y + toPos.y) / 2;
+    const angle = Math.atan2(toPos.y - fromPos.y, toPos.x - fromPos.x);
+    const dist = Math.sqrt((toPos.x - fromPos.x) ** 2 + (toPos.y - fromPos.y) ** 2);
+    const controlOffset = Math.min(dist * 0.15, 30);
+    const cpX = midX + Math.cos(angle + Math.PI / 2) * controlOffset;
+    const cpY = midY + Math.sin(angle + Math.PI / 2) * controlOffset;
+
+    const previewPulse = 0.5 + Math.sin(time * 6) * 0.3;
+
+    this.ctx.beginPath();
+    this.ctx.moveTo(fromPos.x, fromPos.y);
+    this.ctx.quadraticCurveTo(cpX, cpY, toPos.x, toPos.y);
+    this.ctx.strokeStyle = `rgba(100, 200, 255, ${0.15 * previewPulse})`;
+    this.ctx.lineWidth = 12;
+    this.ctx.lineCap = 'round';
+    this.ctx.stroke();
+
+    this.ctx.beginPath();
+    this.ctx.moveTo(fromPos.x, fromPos.y);
+    this.ctx.quadraticCurveTo(cpX, cpY, toPos.x, toPos.y);
+    this.ctx.strokeStyle = `rgba(100, 200, 255, ${0.4 * previewPulse})`;
+    this.ctx.lineWidth = 4;
+    this.ctx.setLineDash([8, 6]);
+    this.ctx.lineDashOffset = -time * 30;
+    this.ctx.stroke();
+    this.ctx.setLineDash([]);
+    this.ctx.lineDashOffset = 0;
+
+    this.ctx.beginPath();
+    this.ctx.moveTo(fromPos.x, fromPos.y);
+    this.ctx.quadraticCurveTo(cpX, cpY, toPos.x, toPos.y);
+    this.ctx.strokeStyle = `rgba(180, 230, 255, ${0.7 * previewPulse})`;
+    this.ctx.lineWidth = 1.5;
+    this.ctx.stroke();
+
+    const arrowT = 0.5 + Math.sin(time * 3) * 0.2;
+    const arrowX = (1 - arrowT) ** 2 * fromPos.x + 2 * (1 - arrowT) * arrowT * cpX + arrowT ** 2 * toPos.x;
+    const arrowY = (1 - arrowT) ** 2 * fromPos.y + 2 * (1 - arrowT) * arrowT * cpY + arrowT ** 2 * toPos.y;
+    const arrowAngle = Math.atan2(
+      2 * (1 - arrowT) * (cpY - fromPos.y) + 2 * arrowT * (toPos.y - cpY),
+      2 * (1 - arrowT) * (cpX - fromPos.x) + 2 * arrowT * (toPos.x - cpX)
+    );
+    const arrowSize = 8;
+
+    this.ctx.beginPath();
+    this.ctx.moveTo(arrowX, arrowY);
+    this.ctx.lineTo(
+      arrowX - Math.cos(arrowAngle - 0.4) * arrowSize,
+      arrowY - Math.sin(arrowAngle - 0.4) * arrowSize
+    );
+    this.ctx.lineTo(
+      arrowX - Math.cos(arrowAngle + 0.4) * arrowSize,
+      arrowY - Math.sin(arrowAngle + 0.4) * arrowSize
+    );
+    this.ctx.closePath();
+    this.ctx.fillStyle = `rgba(100, 200, 255, ${previewPulse})`;
+    this.ctx.fill();
+
+    const particleCount = 5;
+    for (let i = 0; i < particleCount; i++) {
+      const t = ((time * 0.5 + i / particleCount) % 1);
+      const px = (1 - t) ** 2 * fromPos.x + 2 * (1 - t) * t * cpX + t ** 2 * toPos.x;
+      const py = (1 - t) ** 2 * fromPos.y + 2 * (1 - t) * t * cpY + t ** 2 * toPos.y;
+      const pr = 2 + Math.sin(time * 8 + i) * 1;
+
+      this.ctx.beginPath();
+      this.ctx.arc(px, py, pr, 0, Math.PI * 2);
+      this.ctx.fillStyle = `rgba(180, 240, 255, ${0.8 * (1 - Math.abs(t - 0.5) * 2)})`;
+      this.ctx.fill();
+    }
+  }
+
+  drawKeyboardModeIndicator(time: number): void {
+    const pulse = 0.8 + Math.sin(time * 3) * 0.2;
+
+    this.ctx.font = 'bold 14px monospace';
+    this.ctx.textAlign = 'left';
+    this.ctx.textBaseline = 'top';
+
+    const x = 20;
+    const y = 100;
+    const padding = 12;
+    const lineHeight = 22;
+
+    const lines = [
+      '⌨  KEYBOARD MODE',
+      '────────────────',
+      'Tab    切换模式',
+      '↑↓←→  移动焦点',
+      'Enter  选择/连接',
+      'Esc    取消选择'
+    ];
+
+    let maxWidth = 0;
+    for (const line of lines) {
+      const w = this.ctx.measureText(line).width;
+      if (w > maxWidth) maxWidth = w;
+    }
+
+    const boxW = maxWidth + padding * 2;
+    const boxH = lines.length * lineHeight + padding * 2 - 6;
+
+    this.ctx.fillStyle = `rgba(10, 20, 40, ${0.8 * pulse})`;
+    this.ctx.beginPath();
+    this.ctx.roundRect(x, y, boxW, boxH, 10);
+    this.ctx.fill();
+
+    this.ctx.strokeStyle = `rgba(100, 200, 255, ${0.6 * pulse})`;
+    this.ctx.lineWidth = 2;
+    this.ctx.stroke();
+
+    const cornerGlow = this.ctx.createRadialGradient(x, y, 0, x, y, 40);
+    cornerGlow.addColorStop(0, `rgba(100, 200, 255, ${0.2 * pulse})`);
+    cornerGlow.addColorStop(1, 'rgba(100, 200, 255, 0)');
+    this.ctx.fillStyle = cornerGlow;
+    this.ctx.beginPath();
+    this.ctx.roundRect(x - 10, y - 10, boxW + 20, boxH + 20, 15);
+    this.ctx.fill();
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const ly = y + padding + i * lineHeight;
+
+      if (i === 0) {
+        this.ctx.fillStyle = `rgba(100, 200, 255, ${pulse})`;
+        this.ctx.font = 'bold 15px monospace';
+      } else if (i === 1) {
+        this.ctx.fillStyle = `rgba(100, 200, 255, ${0.4 * pulse})`;
+        this.ctx.font = '12px monospace';
+      } else {
+        this.ctx.fillStyle = `rgba(180, 220, 255, ${0.85})`;
+        this.ctx.font = '12px monospace';
+      }
+
+      this.ctx.fillText(line, x + padding, ly);
+    }
+
+    this.ctx.textBaseline = 'alphabetic';
   }
 
   drawCurve(

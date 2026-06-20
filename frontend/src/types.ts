@@ -77,6 +77,10 @@ export interface GameState {
   showFrequencies: boolean;
   isComplete: boolean;
   snapTargetId: string | null;
+  keyboardMode: boolean;
+  keyboardFocusId: string | null;
+  keyboardStartId: string | null;
+  keyboardPreviewLine: { from: string; to: string } | null;
 }
 
 export interface VerifyResult {

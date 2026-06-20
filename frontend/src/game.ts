@@ -49,7 +49,11 @@ export class Game {
       time: 0,
       showFrequencies: false,
       isComplete: false,
-      snapTargetId: null
+      snapTargetId: null,
+      keyboardMode: false,
+      keyboardFocusId: null,
+      keyboardStartId: null,
+      keyboardPreviewLine: null
     };
 
     this.resize();
@@ -105,6 +109,8 @@ export class Game {
       e.preventDefault();
       this.handleMouseUp();
     });
+
+    window.addEventListener('keydown', (e) => this.handleKeyDown(e));
   }
 
   private getCanvasPos(e: MouseEvent): ScreenPoint {
@@ -135,6 +141,269 @@ export class Game {
     }
 
     return nearest;
+  }
+
+  private getMainAnchors(): AnchorPoint[] {
+    if (!this.state.levelData) return [];
+    return this.state.levelData.anchorPoints.filter(a =>
+      a.id.startsWith('a') || a.id.startsWith('b') || a.id.startsWith('c')
+    );
+  }
+
+  private findNextAnchorByDirection(direction: 'up' | 'down' | 'left' | 'right'): AnchorPoint | null {
+    const anchors = this.getMainAnchors();
+    if (anchors.length === 0) return null;
+
+    const currentFocusId = this.state.keyboardFocusId;
+    if (!currentFocusId) {
+      return this.findClosestToCenterAnchor();
+    }
+
+    const currentAnchor = anchors.find(a => a.id === currentFocusId);
+    if (!currentAnchor) return this.findClosestToCenterAnchor();
+
+    const currentPos = this.renderer.getAnchorScreenPos(currentAnchor, this.state.rotationOffset);
+
+    let bestAnchor: AnchorPoint | null = null;
+    let bestScore = Infinity;
+
+    for (const anchor of anchors) {
+      if (anchor.id === currentFocusId) continue;
+
+      const anchorPos = this.renderer.getAnchorScreenPos(anchor, this.state.rotationOffset);
+      const dx = anchorPos.x - currentPos.x;
+      const dy = anchorPos.y - currentPos.y;
+
+      let directionMatch = 0;
+      let perpendicularDist = 0;
+
+      switch (direction) {
+        case 'up':
+          directionMatch = -dy;
+          perpendicularDist = Math.abs(dx);
+          break;
+        case 'down':
+          directionMatch = dy;
+          perpendicularDist = Math.abs(dx);
+          break;
+        case 'left':
+          directionMatch = -dx;
+          perpendicularDist = Math.abs(dy);
+          break;
+        case 'right':
+          directionMatch = dx;
+          perpendicularDist = Math.abs(dy);
+          break;
+      }
+
+      if (directionMatch <= 0) continue;
+
+      const score = perpendicularDist * 2 + directionMatch * 0.5;
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestAnchor = anchor;
+      }
+    }
+
+    if (!bestAnchor) {
+      return this.findFallbackAnchor(direction, currentPos, anchors, currentFocusId);
+    }
+
+    return bestAnchor;
+  }
+
+  private findClosestToCenterAnchor(): AnchorPoint | null {
+    const anchors = this.getMainAnchors();
+    if (anchors.length === 0) return null;
+
+    const center = this.renderer.getCenter();
+    let nearest: AnchorPoint | null = null;
+    let nearestDist = Infinity;
+
+    for (const anchor of anchors) {
+      const pos = this.renderer.getAnchorScreenPos(anchor, this.state.rotationOffset);
+      const d = distance(pos, center);
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearest = anchor;
+      }
+    }
+
+    return nearest;
+  }
+
+  private findFallbackAnchor(
+    direction: 'up' | 'down' | 'left' | 'right',
+    currentPos: ScreenPoint,
+    anchors: AnchorPoint[],
+    excludeId: string
+  ): AnchorPoint | null {
+    let bestAnchor: AnchorPoint | null = null;
+    let bestScore = Infinity;
+
+    for (const anchor of anchors) {
+      if (anchor.id === excludeId) continue;
+
+      const anchorPos = this.renderer.getAnchorScreenPos(anchor, this.state.rotationOffset);
+      const dx = anchorPos.x - currentPos.x;
+      const dy = anchorPos.y - currentPos.y;
+
+      let score = Infinity;
+
+      switch (direction) {
+        case 'up':
+          score = Math.abs(dy) + Math.abs(dx) * 0.5 + (dy > 0 ? 1000 : 0);
+          break;
+        case 'down':
+          score = Math.abs(dy) + Math.abs(dx) * 0.5 + (dy < 0 ? 1000 : 0);
+          break;
+        case 'left':
+          score = Math.abs(dx) + Math.abs(dy) * 0.5 + (dx > 0 ? 1000 : 0);
+          break;
+        case 'right':
+          score = Math.abs(dx) + Math.abs(dy) * 0.5 + (dx < 0 ? 1000 : 0);
+          break;
+      }
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestAnchor = anchor;
+      }
+    }
+
+    return bestAnchor;
+  }
+
+  private async handleKeyDown(e: KeyboardEvent): Promise<void> {
+    if (this.state.isComplete) return;
+
+    const key = e.key;
+
+    if (key === 'Tab') {
+      e.preventDefault();
+      this.toggleKeyboardMode();
+      return;
+    }
+
+    if (!this.state.keyboardMode) return;
+
+    e.preventDefault();
+
+    switch (key) {
+      case 'ArrowUp':
+      case 'ArrowDown':
+      case 'ArrowLeft':
+      case 'ArrowRight':
+        this.handleArrowKey(key.slice(5).toLowerCase() as 'up' | 'down' | 'left' | 'right');
+        break;
+      case 'Enter':
+      case ' ':
+        await this.handleKeyboardSelect();
+        break;
+      case 'Escape':
+        this.cancelKeyboardSelection();
+        break;
+    }
+  }
+
+  private toggleKeyboardMode(): void {
+    this.state.keyboardMode = !this.state.keyboardMode;
+
+    if (this.state.keyboardMode) {
+      const anchor = this.findClosestToCenterAnchor();
+      if (anchor) {
+        this.state.keyboardFocusId = anchor.id;
+      }
+    } else {
+      this.cancelKeyboardSelection();
+    }
+  }
+
+  private handleArrowKey(direction: 'up' | 'down' | 'left' | 'right'): void {
+    const nextAnchor = this.findNextAnchorByDirection(direction);
+    if (nextAnchor) {
+      this.state.keyboardFocusId = nextAnchor.id;
+
+      if (this.state.keyboardStartId && this.state.keyboardStartId !== nextAnchor.id) {
+        this.state.keyboardPreviewLine = {
+          from: this.state.keyboardStartId,
+          to: nextAnchor.id
+        };
+      } else {
+        this.state.keyboardPreviewLine = null;
+      }
+    }
+  }
+
+  private async handleKeyboardSelect(): Promise<void> {
+    if (!this.state.keyboardFocusId) return;
+
+    if (!this.state.keyboardStartId) {
+      this.state.keyboardStartId = this.state.keyboardFocusId;
+      this.state.keyboardPreviewLine = null;
+    } else if (this.state.keyboardStartId !== this.state.keyboardFocusId) {
+      await this.createKeyboardConnection(this.state.keyboardStartId, this.state.keyboardFocusId);
+      this.state.keyboardStartId = null;
+      this.state.keyboardPreviewLine = null;
+    } else {
+      this.state.keyboardStartId = null;
+      this.state.keyboardPreviewLine = null;
+    }
+  }
+
+  private cancelKeyboardSelection(): void {
+    this.state.keyboardStartId = null;
+    this.state.keyboardPreviewLine = null;
+  }
+
+  private async createKeyboardConnection(fromId: string, toId: string): Promise<void> {
+    if (!this.state.levelData) return;
+
+    const edgeKey = [fromId, toId].sort().join('-');
+    const alreadyConnected = this.state.completedEdges.has(edgeKey);
+
+    if (alreadyConnected) return;
+
+    const startAnchor = this.state.levelData.anchorPoints.find(a => a.id === fromId)!;
+    const endAnchor = this.state.levelData.anchorPoints.find(a => a.id === toId)!;
+
+    const startPos = this.renderer.getAnchorScreenPos(startAnchor, this.state.rotationOffset);
+    const endPos = this.renderer.getAnchorScreenPos(endAnchor, this.state.rotationOffset);
+
+    const midX = (startPos.x + endPos.x) / 2 + (Math.random() - 0.5) * 30;
+    const midY = (startPos.y + endPos.y) / 2 + (Math.random() - 0.5) * 30;
+
+    const curvePoints: CurvePoint[] = [
+      { x: startPos.x, y: startPos.y },
+      { x: midX, y: midY, t: 0.5 },
+      { x: endPos.x, y: endPos.y }
+    ];
+
+    const smoothed = smoothPath(curvePoints, 0.3);
+
+    const result = await verifyEdge(this.state.currentLevel, fromId, toId);
+
+    const connection: Connection = {
+      from: fromId,
+      to: toId,
+      curve: smoothed,
+      valid: result.valid,
+      opacity: 0,
+      glowIntensity: 0
+    };
+
+    this.state.connections.push(connection);
+    this.animateConnection(connection);
+
+    if (result.valid) {
+      this.state.completedEdges.add(edgeKey);
+      this.checkCompletion();
+    } else {
+      setTimeout(() => {
+        this.removeConnection(fromId, toId);
+      }, 1500);
+    }
   }
 
   private handleMouseDown(e: MouseEvent): void {
@@ -345,6 +614,9 @@ export class Game {
     this.state.isComplete = false;
     this.state.drawState = this.createEmptyDrawState();
     this.state.snapTargetId = null;
+    this.state.keyboardFocusId = this.state.keyboardMode ? this.findClosestToCenterAnchor()?.id ?? null : null;
+    this.state.keyboardStartId = null;
+    this.state.keyboardPreviewLine = null;
     this.onProgressChange?.(0, this.state.levelData?.edges.length ?? 0);
   }
 
@@ -371,6 +643,29 @@ export class Game {
     this.state.drawState = this.createEmptyDrawState();
     this.state.snapTargetId = null;
     this.state.showFrequencies = false;
+    this.state.keyboardStartId = null;
+    this.state.keyboardPreviewLine = null;
+
+    const mainAnchors = data.anchorPoints.filter(a =>
+      a.id.startsWith('a') || a.id.startsWith('b') || a.id.startsWith('c')
+    );
+    if (mainAnchors.length > 0 && this.state.keyboardMode) {
+      const center = this.renderer.getCenter();
+      let nearest = mainAnchors[0];
+      let nearestDist = Infinity;
+      for (const anchor of mainAnchors) {
+        const maxDim = Math.min(this.renderer['width'], this.renderer['height']) * 0.9;
+        const relX = (anchor.x - 0.5) * maxDim;
+        const relY = (anchor.y - 0.5) * maxDim;
+        const pos = { x: center.x + relX, y: center.y + relY };
+        const d = Math.sqrt((pos.x - center.x) ** 2 + (pos.y - center.y) ** 2);
+        if (d < nearestDist) {
+          nearestDist = d;
+          nearest = anchor;
+        }
+      }
+      this.state.keyboardFocusId = nearest.id;
+    }
 
     this.onLevelChange?.(data);
     this.onProgressChange?.(0, data.edges.length);
@@ -457,6 +752,23 @@ export class Game {
         }
       }
 
+      if (this.state.keyboardPreviewLine && this.state.keyboardMode) {
+        const fromAnchor = this.state.levelData.anchorPoints.find(
+          a => a.id === this.state.keyboardPreviewLine!.from
+        );
+        const toAnchor = this.state.levelData.anchorPoints.find(
+          a => a.id === this.state.keyboardPreviewLine!.to
+        );
+        if (fromAnchor && toAnchor) {
+          this.renderer.drawKeyboardPreviewLine(
+            fromAnchor,
+            toAnchor,
+            this.state.time,
+            this.state.rotationOffset
+          );
+        }
+      }
+
       const connectedIds = new Set<string>();
       this.state.connections.filter(c => c.valid).forEach(c => {
         connectedIds.add(c.from);
@@ -469,11 +781,22 @@ export class Game {
         this.state.time,
         this.state.showFrequencies,
         this.state.snapTargetId ?? this.state.drawState.startAnchorId,
-        connectedIds
+        connectedIds,
+        this.state.keyboardMode,
+        this.state.keyboardFocusId,
+        this.state.keyboardStartId
       );
+
+      if (this.state.keyboardMode) {
+        this.renderer.drawKeyboardModeIndicator(this.state.time);
+      }
 
       this.renderer.drawCompletionEffect(this.state.time, this.getProgress());
     }
+  }
+
+  isKeyboardMode(): boolean {
+    return this.state.keyboardMode;
   }
 
   private getProgress(): number {
