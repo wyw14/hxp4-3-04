@@ -81,6 +81,8 @@ export interface GameState {
   keyboardFocusId: string | null;
   keyboardStartId: string | null;
   keyboardPreviewLine: { from: string; to: string } | null;
+  isVerifying: boolean;
+  feedbackShake: { ids: string[]; intensity: number; startTime: number } | null;
 }
 
 export interface VerifyResult {

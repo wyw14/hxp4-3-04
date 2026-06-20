@@ -53,7 +53,9 @@ export class Game {
       keyboardMode: false,
       keyboardFocusId: null,
       keyboardStartId: null,
-      keyboardPreviewLine: null
+      keyboardPreviewLine: null,
+      isVerifying: false,
+      feedbackShake: null
     };
 
     this.resize();
@@ -290,6 +292,8 @@ export class Game {
 
     e.preventDefault();
 
+    if (this.state.isVerifying) return;
+
     switch (key) {
       case 'ArrowUp':
       case 'ArrowDown':
@@ -337,13 +341,24 @@ export class Game {
   }
 
   private async handleKeyboardSelect(): Promise<void> {
-    if (!this.state.keyboardFocusId) return;
+    if (!this.state.keyboardFocusId || this.state.isVerifying) return;
 
     if (!this.state.keyboardStartId) {
       this.state.keyboardStartId = this.state.keyboardFocusId;
       this.state.keyboardPreviewLine = null;
     } else if (this.state.keyboardStartId !== this.state.keyboardFocusId) {
-      await this.createKeyboardConnection(this.state.keyboardStartId, this.state.keyboardFocusId);
+      this.state.isVerifying = true;
+      try {
+        const result = await this.createConnectionBetween(
+          this.state.keyboardStartId,
+          this.state.keyboardFocusId
+        );
+        if (result === 'duplicate') {
+          this.triggerShakeFeedback([this.state.keyboardStartId, this.state.keyboardFocusId]);
+        }
+      } finally {
+        this.state.isVerifying = false;
+      }
       this.state.keyboardStartId = null;
       this.state.keyboardPreviewLine = null;
     } else {
@@ -352,18 +367,32 @@ export class Game {
     }
   }
 
+  private triggerShakeFeedback(anchorIds: string[]): void {
+    this.state.feedbackShake = {
+      ids: anchorIds,
+      intensity: 8,
+      startTime: performance.now()
+    };
+  }
+
   private cancelKeyboardSelection(): void {
+    if (this.state.isVerifying) return;
     this.state.keyboardStartId = null;
     this.state.keyboardPreviewLine = null;
   }
 
-  private async createKeyboardConnection(fromId: string, toId: string): Promise<void> {
-    if (!this.state.levelData) return;
+  private async createConnectionBetween(
+    fromId: string,
+    toId: string
+  ): Promise<'success' | 'invalid' | 'duplicate'> {
+    if (!this.state.levelData) return 'invalid';
 
     const edgeKey = [fromId, toId].sort().join('-');
     const alreadyConnected = this.state.completedEdges.has(edgeKey);
 
-    if (alreadyConnected) return;
+    if (alreadyConnected) {
+      return 'duplicate';
+    }
 
     const startAnchor = this.state.levelData.anchorPoints.find(a => a.id === fromId)!;
     const endAnchor = this.state.levelData.anchorPoints.find(a => a.id === toId)!;
@@ -371,23 +400,29 @@ export class Game {
     const startPos = this.renderer.getAnchorScreenPos(startAnchor, this.state.rotationOffset);
     const endPos = this.renderer.getAnchorScreenPos(endAnchor, this.state.rotationOffset);
 
-    const midX = (startPos.x + endPos.x) / 2 + (Math.random() - 0.5) * 30;
-    const midY = (startPos.y + endPos.y) / 2 + (Math.random() - 0.5) * 30;
+    const midX = (startPos.x + endPos.x) / 2 + (Math.random() - 0.5) * 40;
+    const midY = (startPos.y + endPos.y) / 2 + (Math.random() - 0.5) * 40;
 
-    const curvePoints: CurvePoint[] = [
+    const rawPoints: CurvePoint[] = [
       { x: startPos.x, y: startPos.y },
       { x: midX, y: midY, t: 0.5 },
       { x: endPos.x, y: endPos.y }
     ];
 
-    const smoothed = smoothPath(curvePoints, 0.3);
+    const smoothed = smoothPath(rawPoints, 0.4);
+
+    const curvePoints: CurvePoint[] = [
+      { x: startPos.x, y: startPos.y },
+      ...smoothed.slice(1, -1),
+      { x: endPos.x, y: endPos.y }
+    ];
 
     const result = await verifyEdge(this.state.currentLevel, fromId, toId);
 
     const connection: Connection = {
       from: fromId,
       to: toId,
-      curve: smoothed,
+      curve: curvePoints,
       valid: result.valid,
       opacity: 0,
       glowIntensity: 0
@@ -399,10 +434,12 @@ export class Game {
     if (result.valid) {
       this.state.completedEdges.add(edgeKey);
       this.checkCompletion();
+      return 'success';
     } else {
       setTimeout(() => {
         this.removeConnection(fromId, toId);
       }, 1500);
+      return 'invalid';
     }
   }
 
@@ -445,7 +482,7 @@ export class Game {
   }
 
   private async handleMouseUp(): Promise<void> {
-    if (!this.state.drawState.isDrawing || !this.state.levelData) {
+    if (!this.state.drawState.isDrawing || !this.state.levelData || this.state.isVerifying) {
       this.state.drawState = this.createEmptyDrawState();
       return;
     }
@@ -480,28 +517,38 @@ export class Game {
         curvePoints = simplifyPath(curvePoints, 5);
         curvePoints = smoothPath(curvePoints, 0.5);
 
-        const result = await verifyEdge(this.state.currentLevel, startId, endId);
+        curvePoints[0] = { x: startPos.x, y: startPos.y };
+        curvePoints[curvePoints.length - 1] = { x: endPos!.x, y: endPos!.y };
 
-        const connection: Connection = {
-          from: startId,
-          to: endId,
-          curve: curvePoints,
-          valid: result.valid,
-          opacity: 0,
-          glowIntensity: 0
-        };
+        this.state.isVerifying = true;
+        try {
+          const result = await verifyEdge(this.state.currentLevel, startId, endId);
 
-        this.state.connections.push(connection);
-        this.animateConnection(connection);
+          const connection: Connection = {
+            from: startId,
+            to: endId,
+            curve: curvePoints,
+            valid: result.valid,
+            opacity: 0,
+            glowIntensity: 0
+          };
 
-        if (result.valid) {
-          this.state.completedEdges.add(edgeKey);
-          this.checkCompletion();
-        } else {
-          setTimeout(() => {
-            this.removeConnection(startId, endId);
-          }, 1500);
+          this.state.connections.push(connection);
+          this.animateConnection(connection);
+
+          if (result.valid) {
+            this.state.completedEdges.add(edgeKey);
+            this.checkCompletion();
+          } else {
+            setTimeout(() => {
+              this.removeConnection(startId, endId);
+            }, 1500);
+          }
+        } finally {
+          this.state.isVerifying = false;
         }
+      } else {
+        this.triggerShakeFeedback([startId, endId]);
       }
     }
 
@@ -617,6 +664,8 @@ export class Game {
     this.state.keyboardFocusId = this.state.keyboardMode ? this.findClosestToCenterAnchor()?.id ?? null : null;
     this.state.keyboardStartId = null;
     this.state.keyboardPreviewLine = null;
+    this.state.isVerifying = false;
+    this.state.feedbackShake = null;
     this.onProgressChange?.(0, this.state.levelData?.edges.length ?? 0);
   }
 
@@ -645,6 +694,8 @@ export class Game {
     this.state.showFrequencies = false;
     this.state.keyboardStartId = null;
     this.state.keyboardPreviewLine = null;
+    this.state.isVerifying = false;
+    this.state.feedbackShake = null;
 
     const mainAnchors = data.anchorPoints.filter(a =>
       a.id.startsWith('a') || a.id.startsWith('b') || a.id.startsWith('c')
@@ -713,6 +764,13 @@ export class Game {
     this.state.connections.forEach(c => {
       c.opacity = Math.min(c.opacity, 1);
     });
+
+    if (this.state.feedbackShake) {
+      const elapsed = performance.now() - this.state.feedbackShake.startTime;
+      if (elapsed > 400) {
+        this.state.feedbackShake = null;
+      }
+    }
   }
 
   private render(): void {
@@ -784,11 +842,13 @@ export class Game {
         connectedIds,
         this.state.keyboardMode,
         this.state.keyboardFocusId,
-        this.state.keyboardStartId
+        this.state.keyboardStartId,
+        this.state.feedbackShake,
+        this.state.isVerifying
       );
 
       if (this.state.keyboardMode) {
-        this.renderer.drawKeyboardModeIndicator(this.state.time);
+        this.renderer.drawKeyboardModeIndicator(this.state.time, this.state.isVerifying);
       }
 
       this.renderer.drawCompletionEffect(this.state.time, this.getProgress());

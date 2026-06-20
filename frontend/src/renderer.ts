@@ -149,10 +149,27 @@ export class Renderer {
     connectedIds: Set<string>,
     keyboardMode: boolean = false,
     keyboardFocusId: string | null = null,
-    keyboardStartId: string | null = null
+    keyboardStartId: string | null = null,
+    feedbackShake: { ids: string[]; intensity: number; startTime: number } | null = null,
+    isVerifying: boolean = false
   ): void {
+    const now = performance.now();
+
     for (const anchor of anchors) {
-      const pos = this.getAnchorScreenPos(anchor, rotation);
+      let pos = this.getAnchorScreenPos(anchor, rotation);
+
+      let shakeX = 0;
+      let shakeY = 0;
+      if (feedbackShake && feedbackShake.ids.includes(anchor.id)) {
+        const elapsed = now - feedbackShake.startTime;
+        const progress = Math.min(elapsed / 400, 1);
+        const decay = 1 - progress;
+        const frequency = 30;
+        shakeX = Math.sin(elapsed * frequency * 0.01) * feedbackShake.intensity * decay;
+        shakeY = Math.cos(elapsed * frequency * 0.013) * feedbackShake.intensity * decay * 0.7;
+        pos = { x: pos.x + shakeX, y: pos.y + shakeY };
+      }
+
       const twinkle = Math.sin(time * anchor.frequency * 0.8) * 0.3 + 0.7;
       const brightness = (anchor.baseBrightness ?? 0.7) * twinkle;
       const isKeyboardFocus = keyboardMode && keyboardFocusId === anchor.id;
@@ -169,6 +186,10 @@ export class Renderer {
         starColor = { r: 100, g: 255, b: 180 };
       } else if (isKeyboardFocus) {
         starColor = { r: 150, g: 200, b: 255 };
+      }
+
+      if (feedbackShake && feedbackShake.ids.includes(anchor.id)) {
+        starColor = { r: 255, g: 120, b: 120 };
       }
 
       const glowR = size * 8;
@@ -233,6 +254,26 @@ export class Renderer {
           this.ctx.stroke();
         }
         this.ctx.lineCap = 'butt';
+
+        if (isVerifying) {
+          const verifyR = focusR * 2.2;
+          const verifyProgress = (time * 2) % 1;
+          this.ctx.beginPath();
+          this.ctx.arc(pos.x, pos.y, verifyR, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * verifyProgress);
+          this.ctx.strokeStyle = `rgba(255, 220, 100, ${0.8})`;
+          this.ctx.lineWidth = 3;
+          this.ctx.stroke();
+
+          for (let i = 0; i < 3; i++) {
+            const dotAngle = (time * 3 + i * Math.PI * 2 / 3) % (Math.PI * 2);
+            const dotX = pos.x + Math.cos(dotAngle) * verifyR;
+            const dotY = pos.y + Math.sin(dotAngle) * verifyR;
+            this.ctx.beginPath();
+            this.ctx.arc(dotX, dotY, 3, 0, Math.PI * 2);
+            this.ctx.fillStyle = `rgba(255, 220, 100, ${0.9})`;
+            this.ctx.fill();
+          }
+        }
       }
 
       if (isKeyboardStart) {
@@ -371,7 +412,7 @@ export class Renderer {
     }
   }
 
-  drawKeyboardModeIndicator(time: number): void {
+  drawKeyboardModeIndicator(time: number, isVerifying: boolean = false): void {
     const pulse = 0.8 + Math.sin(time * 3) * 0.2;
 
     this.ctx.font = 'bold 14px monospace';
@@ -383,7 +424,7 @@ export class Renderer {
     const padding = 12;
     const lineHeight = 22;
 
-    const lines = [
+    const baseLines = [
       '⌨  KEYBOARD MODE',
       '────────────────',
       'Tab    切换模式',
@@ -391,6 +432,12 @@ export class Renderer {
       'Enter  选择/连接',
       'Esc    取消选择'
     ];
+
+    let lines = [...baseLines];
+    if (isVerifying) {
+      lines.push('');
+      lines.push('⏳  验证中...');
+    }
 
     let maxWidth = 0;
     for (const line of lines) {
@@ -401,12 +448,19 @@ export class Renderer {
     const boxW = maxWidth + padding * 2;
     const boxH = lines.length * lineHeight + padding * 2 - 6;
 
+    let borderColor = `rgba(100, 200, 255, ${0.6 * pulse})`;
+    let titleColor = `rgba(100, 200, 255, ${pulse})`;
+    if (isVerifying) {
+      borderColor = `rgba(255, 220, 100, ${0.8 * pulse})`;
+      titleColor = `rgba(255, 220, 100, ${pulse})`;
+    }
+
     this.ctx.fillStyle = `rgba(10, 20, 40, ${0.8 * pulse})`;
     this.ctx.beginPath();
     this.ctx.roundRect(x, y, boxW, boxH, 10);
     this.ctx.fill();
 
-    this.ctx.strokeStyle = `rgba(100, 200, 255, ${0.6 * pulse})`;
+    this.ctx.strokeStyle = borderColor;
     this.ctx.lineWidth = 2;
     this.ctx.stroke();
 
@@ -423,17 +477,28 @@ export class Renderer {
       const ly = y + padding + i * lineHeight;
 
       if (i === 0) {
-        this.ctx.fillStyle = `rgba(100, 200, 255, ${pulse})`;
+        this.ctx.fillStyle = titleColor;
         this.ctx.font = 'bold 15px monospace';
       } else if (i === 1) {
         this.ctx.fillStyle = `rgba(100, 200, 255, ${0.4 * pulse})`;
         this.ctx.font = '12px monospace';
+      } else if (isVerifying && i === lines.length - 1) {
+        this.ctx.fillStyle = `rgba(255, 220, 100, ${pulse})`;
+        this.ctx.font = 'bold 13px monospace';
+      } else if (line === '') {
+        continue;
       } else {
         this.ctx.fillStyle = `rgba(180, 220, 255, ${0.85})`;
         this.ctx.font = '12px monospace';
       }
 
-      this.ctx.fillText(line, x + padding, ly);
+      if (isVerifying && i === lines.length - 1) {
+        const dots = Math.floor(time * 3) % 4;
+        const dotStr = '.'.repeat(dots);
+        this.ctx.fillText(line + dotStr, x + padding, ly);
+      } else if (line !== '') {
+        this.ctx.fillText(line, x + padding, ly);
+      }
     }
 
     this.ctx.textBaseline = 'alphabetic';
